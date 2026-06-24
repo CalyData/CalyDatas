@@ -41,13 +41,19 @@ def _config(clave: str) -> str:
 
 
 def _engine():
-    host = _config("SUPABASE_DB_HOST")
-    port = _config("SUPABASE_DB_PORT")
-    dbname = _config("SUPABASE_DB_NAME")
-    user = _config("SUPABASE_DB_USER")
-    password = quote_plus(_config("SUPABASE_DB_PASSWORD"))
-    uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}"
-    return create_engine(uri, pool_pre_ping=True)
+    """Usa sqlalchemy.engine.URL.create en vez de armar el string a mano — evita
+    tener que pre-codificar caracteres especiales del password (%, !, ^) nosotros
+    mismos, que generaba doble-codificación y fallos de autenticación intermitentes."""
+    from sqlalchemy.engine import URL
+    url = URL.create(
+        "postgresql+psycopg2",
+        username=_config("SUPABASE_DB_USER"),
+        password=_config("SUPABASE_DB_PASSWORD"),
+        host=_config("SUPABASE_DB_HOST"),
+        port=int(_config("SUPABASE_DB_PORT")),
+        database=_config("SUPABASE_DB_NAME"),
+    )
+    return create_engine(url, pool_pre_ping=True)
 
 
 def _query(sql, params=None):

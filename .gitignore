@@ -1,0 +1,19 @@
+.env
+__pycache__/
+*.pyc
+_cache/
+logs/
+*.log
+check_*.json
+check_*.csv
+
+# Scripts de migracion/sync - quedan SOLO en esta PC, tienen credenciales y no
+# son parte de la app web que se despliega en Streamlit Cloud
+migrar_*.py
+sync_incremental.py
+auditoria_quincenal.py
+chess_api.py
+schema.sql
+PENDIENTES.md
+run_*.bat
+run_*.vbs

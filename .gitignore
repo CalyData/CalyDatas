@@ -17,3 +17,6 @@ schema.sql
 PENDIENTES.md
 run_*.bat
 run_*.vbs
+actualizar_ficha_manual.bat
+check_validacion.py
+.streamlit/

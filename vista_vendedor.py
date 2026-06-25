@@ -257,8 +257,9 @@ def _tend_cls(ava):
     if ava >= 0.80: return "av-warn"
     return "av-neg"
 
-def _render_avance(vendedor_cod):
-    datos = cargar_avance_vendedor(vendedor_cod)
+def _render_avance(vendedor_cod, datos=None):
+    if datos is None:
+        datos = cargar_avance_vendedor(vendedor_cod)
     if datos is None:
         st.info("No se encontró hoja de avance para este vendedor.")
         return

@@ -3,6 +3,7 @@ import os
 import streamlit as st
 import vista_cliente
 import vista_vendedor
+import vista_gerencial
 
 st.set_page_config(page_title="Ficha Comercial", page_icon="🏪", layout="centered")
 
@@ -102,7 +103,8 @@ st.markdown(f"""
 st.markdown("""
 <style>
 div[class*="st-key-sel_cliente"] button,
-div[class*="st-key-sel_vendedor"] button {
+div[class*="st-key-sel_vendedor"] button,
+div[class*="st-key-sel_gerencial"] button {
     height: 80px !important;
     font-size: 1.05rem !important;
     font-weight: 600 !important;
@@ -111,7 +113,8 @@ div[class*="st-key-sel_vendedor"] button {
     transition: all 0.15s ease !important;
 }
 div[class*="st-key-sel_cliente"] button[kind="primary"],
-div[class*="st-key-sel_vendedor"] button[kind="primary"] {
+div[class*="st-key-sel_vendedor"] button[kind="primary"],
+div[class*="st-key-sel_gerencial"] button[kind="primary"] {
     border: 2px solid #1a6eb5 !important;
 }
 </style>
@@ -120,7 +123,7 @@ div[class*="st-key-sel_vendedor"] button[kind="primary"] {
 if "opcion" not in st.session_state:
     st.session_state.opcion = "Cliente"
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 with c1:
     if st.button("🏪  Ficha Cliente\nConsultá info de un PDV",
                  key="sel_cliente", use_container_width=True,
@@ -132,6 +135,12 @@ with c2:
                  key="sel_vendedor", use_container_width=True,
                  type="primary" if st.session_state.opcion == "Vendedor" else "secondary"):
         st.session_state.opcion = "Vendedor"
+        st.rerun()
+with c3:
+    if st.button("📊  Ficha Gerencial\nSupervisor / Jefe / Grupo Palco",
+                 key="sel_gerencial", use_container_width=True,
+                 type="primary" if st.session_state.opcion == "Gerencial" else "secondary"):
+        st.session_state.opcion = "Gerencial"
         st.rerun()
 
 opcion = st.session_state.opcion
@@ -147,5 +156,7 @@ st.divider()
 
 if opcion == "Cliente":
     vista_cliente.render()
-else:
+elif opcion == "Vendedor":
     vista_vendedor.render()
+else:
+    vista_gerencial.render()

@@ -80,6 +80,57 @@ def cargar_estructura_comercial():
     return _query("SELECT * FROM estructura_comercial")
 
 
+# Supervisor con vendedores "mayoristas/cadenitas/BDR" — el Jefe de Venta (cod 100)
+# se calcula como TODOS los vendedores EXCEPTO los de este supervisor (regla confirmada
+# por el usuario); ese supervisor tiene su propio nivel "Ficha Gerencial" aparte.
+SUPERVISOR_EXCLUIDO_JEFE = 24
+
+
+def resolver_grupo_vendedores(codigo: str) -> dict | None:
+    """Dado el código ingresado en el login de Ficha Gerencial, devuelve:
+    {tipo, nombre, vendedores (lista de vendedor_cod), incluir_lucky, incluir_pana}.
+    - Supervisor (21,22,24,26,27,29,...): sus vendedores, CON Lucky y CON PANA (igual
+      que la ficha de un vendedor individual).
+    - Jefe de Venta ('100'): todos los vendedores MENOS los del supervisor 24, CON
+      Lucky y CON PANA.
+    - Grupo Palco ('palco'): TODOS los vendedores, SIN Lucky y SIN PANA (venta real
+      de proveedor, sin ajustes ni genéricos de canje)."""
+    codigo_norm = str(codigo).strip().lower()
+    estructura = cargar_estructura_comercial()
+
+    if codigo_norm == "palco":
+        vendedores = estructura["vendedor_cod"].dropna().astype(int).tolist()
+        return {
+            "tipo": "palco", "nombre": "Grupo Palco", "codigo": "palco",
+            "vendedores": vendedores, "incluir_lucky": False, "incluir_pana": False,
+        }
+
+    try:
+        cod_num = int(codigo_norm)
+    except ValueError:
+        return None
+
+    if cod_num == 100:
+        vendedores = (
+            estructura[estructura["supervisor_cod"] != SUPERVISOR_EXCLUIDO_JEFE]
+            ["vendedor_cod"].dropna().astype(int).tolist()
+        )
+        return {
+            "tipo": "jefe", "nombre": "Jefe de Venta", "codigo": 100,
+            "vendedores": vendedores, "incluir_lucky": True, "incluir_pana": True,
+        }
+
+    sup_filas = estructura[estructura["supervisor_cod"] == cod_num]
+    if sup_filas.empty:
+        return None
+    vendedores = sup_filas["vendedor_cod"].dropna().astype(int).tolist()
+    nombre_sup = sup_filas.iloc[0].get("supervisor_nombre") or f"Supervisor {cod_num}"
+    return {
+        "tipo": "supervisor", "nombre": nombre_sup, "codigo": cod_num,
+        "vendedores": vendedores, "incluir_lucky": True, "incluir_pana": True,
+    }
+
+
 @st.cache_data(ttl=21600)
 def cargar_personalizacion_visitas():
     df = _query("SELECT * FROM personalizacion_visitas")
@@ -444,23 +495,36 @@ def calcular_vol_cliente(cliente_num: int) -> dict:
     }
 
 
-def calcular_vol_vendedor(vendedor_cod: int) -> dict:
+def _filtro_vendedor(serie_vendedor_cod, vendedor_cod):
+    """vendedor_cod puede ser un int (ficha individual) o una lista/set (ficha gerencial:
+    supervisor/jefe/grupo palco) — en ese caso filtra por pertenencia, no igualdad."""
+    if isinstance(vendedor_cod, (list, set, tuple)):
+        return serie_vendedor_cod.isin(vendedor_cod)
+    return serie_vendedor_cod == vendedor_cod
+
+
+def calcular_vol_vendedor(vendedor_cod, incluir_lucky: bool = True, incluir_pana: bool = True) -> dict:
     hoy = datetime.date.today()
     p_actual   = (hoy.year, hoy.month)
     p_mes_ant  = (hoy.year, hoy.month - 1) if hoy.month > 1 else (hoy.year - 1, 12)
     p_anio_ant = (hoy.year - 1, hoy.month)
 
     cartera = cargar_cartera()
-    clientes = set(cartera[cartera["vendedor_cod"] == vendedor_cod]["cliente"].dropna().astype(int).tolist())
+    clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int).tolist())
 
     hist = cargar_historico_compras()
     hist = hist[hist["cliente"].isin(clientes)].copy()
+    if not incluir_lucky:
+        hist = hist[hist["fuente"] != "lucky"]
     hist["fecha"] = pd.to_datetime(hist["fecha"], errors="coerce")
     hist["_anio"] = hist["fecha"].dt.year
     hist["_mes"]  = hist["fecha"].dt.month
 
-    maestro = cargar_maestro_arbol()[["articulo", "arbol"]].drop_duplicates("articulo")
+    cols_maestro = ["articulo", "arbol"] + (["es_pana"] if not incluir_pana else [])
+    maestro = cargar_maestro_arbol()[cols_maestro].drop_duplicates("articulo")
     hist = hist.merge(maestro, on="articulo", how="left")
+    if not incluir_pana:
+        hist = hist[hist["es_pana"] != True]
 
     _FILTROS = {
         "hl_total":      lambda h, u, a, m: pd.Series([True] * len(h), index=h.index),
@@ -626,12 +690,18 @@ def calcular_analytics_cliente(cliente_num: int) -> dict:
 
 
 @st.cache_data(ttl=900)
-def calcular_analytics_vendedor(vendedor_cod: int) -> dict:
+def calcular_analytics_vendedor(vendedor_cod, incluir_lucky: bool = True, incluir_pana: bool = True) -> dict:
     cartera  = cargar_cartera()
-    clientes = set(cartera[cartera["vendedor_cod"] == vendedor_cod]["cliente"].dropna().astype(int))
+    clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int))
 
     hist_all = cargar_historico_compras()
     hist_vnd = hist_all[hist_all["cliente"].isin(clientes)]
+    if not incluir_lucky:
+        hist_vnd = hist_vnd[hist_vnd["fuente"] != "lucky"]
+    if not incluir_pana:
+        _pana_arts = set(cargar_maestro_arbol().loc[lambda d: d.get("es_pana") == True, "articulo"]) \
+            if "es_pana" in cargar_maestro_arbol().columns else set()
+        hist_vnd = hist_vnd[~hist_vnd["articulo"].isin(_pana_arts)]
 
     df, hoy = _prep_hist_ytd(hist_vnd)
 
@@ -728,11 +798,11 @@ def _calc_tbd(group: pd.DataFrame, es_cerveza: bool) -> int:
         )
 
 
-def construir_arbol_vendedor(vendedor_cod: int) -> dict:
+def construir_arbol_vendedor(vendedor_cod, incluir_lucky: bool = True) -> dict:
     hoy = datetime.date.today()
 
     cartera  = cargar_cartera()
-    clientes = set(cartera[cartera["vendedor_cod"] == vendedor_cod]["cliente"].dropna().astype(int).tolist())
+    clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int).tolist())
 
     hist = cargar_historico_compras()
     hist["fecha"] = pd.to_datetime(hist["fecha"], errors="coerce")
@@ -741,6 +811,8 @@ def construir_arbol_vendedor(vendedor_cod: int) -> dict:
         (hist["fecha"].dt.year  == hoy.year) &
         (hist["fecha"].dt.month == hoy.month)
     ].copy()
+    if not incluir_lucky:
+        hist_mes = hist_mes[hist_mes["fuente"] != "lucky"]
 
     maestro = cargar_maestro_arbol()
     maestro = maestro.dropna(subset=["unidad_negocio", "arbol", "marca"])
@@ -809,7 +881,7 @@ def construir_arbol_vendedor(vendedor_cod: int) -> dict:
     }
 
 
-def kpis_vendedor(vendedor_cod: int) -> dict:
+def kpis_vendedor(vendedor_cod) -> dict:
     hoy = datetime.date.today()
     _DIAS_COL = {0:"lun", 1:"mar", 2:"mie", 3:"jue", 4:"vie", 5:"sab", 6:"dom"}
     _DIAS_NOM = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]
@@ -818,12 +890,14 @@ def kpis_vendedor(vendedor_cod: int) -> dict:
     estructura = cargar_estructura_comercial()
     pers       = cargar_personalizacion_visitas()
 
-    mi_cartera = cartera[cartera["vendedor_cod"] == vendedor_cod]
+    es_grupo = isinstance(vendedor_cod, (list, set, tuple))
+
+    mi_cartera = cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]
     clientes   = set(mi_cartera["cliente"].dropna().astype(int).tolist())
 
     total = len(clientes)
 
-    mi_pers = pers[pers["vendedor_cod"] == vendedor_cod]
+    mi_pers = pers[_filtro_vendedor(pers["vendedor_cod"], vendedor_cod)]
 
     cartera_alcohol = int(
         mi_cartera["licencia_alcohol"].astype(str).str.strip().str.upper().eq("SI").sum()
@@ -837,10 +911,14 @@ def kpis_vendedor(vendedor_cod: int) -> dict:
 
     por_vnd = cargar_por_vendedor_semanas()
     sem = semana_actual()
-    fila_vnd = por_vnd[por_vnd["vendedor_cod"] == vendedor_cod]
+    fila_vnd = por_vnd[_filtro_vendedor(por_vnd["vendedor_cod"], vendedor_cod)]
     if not fila_vnd.empty:
-        visitas_semana = int(fila_vnd.iloc[0].get(f"s{sem}_total", 0) or 0)
-        visitas_hoy_plan = int(fila_vnd.iloc[0].get(f"s{sem}_d{hoy.weekday()}", 0) or 0)
+        if es_grupo:
+            visitas_semana   = int(pd.to_numeric(fila_vnd.get(f"s{sem}_total"), errors="coerce").fillna(0).sum())
+            visitas_hoy_plan = int(pd.to_numeric(fila_vnd.get(f"s{sem}_d{hoy.weekday()}"), errors="coerce").fillna(0).sum())
+        else:
+            visitas_semana = int(fila_vnd.iloc[0].get(f"s{sem}_total", 0) or 0)
+            visitas_hoy_plan = int(fila_vnd.iloc[0].get(f"s{sem}_d{hoy.weekday()}", 0) or 0)
     else:
         visitas_semana   = 0
         visitas_hoy_plan = 0
@@ -872,7 +950,11 @@ def kpis_vendedor(vendedor_cod: int) -> dict:
     else:
         eficiencia_vnd = "—"
 
-    info_estructura = estructura[estructura["vendedor_cod"] == vendedor_cod]
+    if es_grupo:
+        info_estructura_dict = None
+    else:
+        info_estructura = estructura[estructura["vendedor_cod"] == vendedor_cod]
+        info_estructura_dict = info_estructura.iloc[0].to_dict() if not info_estructura.empty else None
 
     return {
         "cartera_total":     total,
@@ -883,7 +965,7 @@ def kpis_vendedor(vendedor_cod: int) -> dict:
         "semana_actual":     sem,
         "dia_semana":        _DIAS_NOM[hoy.weekday()],
         "eficiencia_venta":  eficiencia_vnd,
-        "estructura":        info_estructura.iloc[0].to_dict() if not info_estructura.empty else None,
+        "estructura":        info_estructura_dict,
     }
 
 
@@ -919,6 +1001,24 @@ def cargar_avance_vendedor(vendedor_cod: int) -> dict | None:
         import json
         datos = json.loads(datos)
     datos.setdefault("metricas_hl", {m["label"]: m for m in datos.get("metricas_hl_lista", [])})
+    return datos
+
+
+@st.cache_data(ttl=1800)
+def cargar_avance_grupo(codigo_grupo: str) -> dict | None:
+    """Avance de Ficha Gerencial (supervisor/jefe/Grupo Palco) — tabla avance_grupo,
+    formato más simple que el de vendedor (sin tareas/GMV/tiempos/escalas, solo volumen)."""
+    df = _query(
+        "SELECT datos FROM avance_grupo WHERE codigo_grupo = %(cod)s "
+        "ORDER BY fecha_snapshot DESC LIMIT 1",
+        params={"cod": str(codigo_grupo)},
+    )
+    if df.empty:
+        return None
+    datos = df.iloc[0]["datos"]
+    if isinstance(datos, str):
+        import json
+        datos = json.loads(datos)
     return datos
 
 
@@ -1024,7 +1124,7 @@ def cargar_coaching_todos() -> list:
     """Lee la tabla 'coaching' de Supabase — pilares y total_pct ya vienen calculados
     desde la migración (ver migrar_avance_censo_coaching.py)."""
     df = _query(
-        "SELECT coaching_num, activador, supervisor, timestamp_coaching, "
+        "SELECT archivo_origen, coaching_num, activador, supervisor, timestamp_coaching, "
         "plan_logrado, comentario, pilares, total_pct FROM coaching"
     )
     registros = []
@@ -1034,6 +1134,7 @@ def cargar_coaching_todos() -> list:
             import json
             pilares = json.loads(pilares)
         registros.append({
+            "archivo_origen": r["archivo_origen"],
             "coaching_num": r["coaching_num"],
             "activador": r["activador"],
             "supervisor": r["supervisor"],
@@ -1057,6 +1158,41 @@ def calcular_coaching_vendedor(vendedor_cod: int) -> dict | None:
 
     registros = cargar_coaching_todos()
     encontrados = [r for r in registros if _normalizar_nombre(r["activador"]) == nombre_obj]
+    if not encontrados:
+        return None
+
+    resultado = {}
+    for r in encontrados:
+        ts = r["timestamp"]
+        fecha = ts.strftime("%d/%m/%y") if hasattr(ts, "strftime") else str(ts)
+        resultado[r["coaching_num"]] = {
+            "pilares":      r["pilares_pct"],
+            "comentario":   r.get("comentario", ""),
+            "total_pct":    r["total_pct"],
+            "supervisor":   r["supervisor"],
+            "fecha":        fecha,
+            "plan_logrado": r["plan_logrado"],
+        }
+    return resultado
+
+
+def calcular_coaching_supervisor(supervisor_cod: int) -> dict | None:
+    """Coachings que el Jefe de Venta le hizo a este supervisor (archivo Coaching SPV
+    2026.xlsm) — análogo a calcular_coaching_vendedor pero filtrando por archivo_origen
+    'SPV' y por el nombre del supervisor en vez del vendedor."""
+    estructura = cargar_estructura_comercial()
+    fila = estructura[estructura["supervisor_cod"] == supervisor_cod]
+    if fila.empty:
+        return None
+    nombre_obj = _normalizar_nombre(fila.iloc[0].get("supervisor_nombre", ""))
+    if not nombre_obj:
+        return None
+
+    registros = cargar_coaching_todos()
+    encontrados = [
+        r for r in registros
+        if r.get("archivo_origen") == "SPV" and _normalizar_nombre(r["activador"]) == nombre_obj
+    ]
     if not encontrados:
         return None
 

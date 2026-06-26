@@ -62,6 +62,12 @@ def _query(sql, params=None):
 
 # ── Catálogos (desde Supabase) ─────────────────────────────────────────────────
 
+# Vendedores ficticios (no son personas reales que visitan clientes) — sus clientes
+# asignados no deben contarse en la cartera/cobertura de NINGÚN vendedor/supervisor/
+# jefe/Grupo Palco. Confirmado por el usuario: 98 "INDICADOR ESPECIAL".
+VENDEDORES_FICTICIOS = {98}
+
+
 @st.cache_data(ttl=21600)
 def cargar_cartera():
     df = _query("SELECT * FROM clientes")
@@ -72,6 +78,7 @@ def cargar_cartera():
         df = df[df["anulado"].astype(str).str.strip().str.upper() == "NO"]
     if "fv1_anulado" in df.columns:
         df = df[df["fv1_anulado"].astype(str).str.strip().str.upper() == "NO"]
+    df = df[~df["vendedor_cod"].isin(VENDEDORES_FICTICIOS)]
     return df
 
 

@@ -54,11 +54,47 @@ def _render_avance_grupo(grupo):
     datos = dl.cargar_avance_grupo(str(codigo))
     if datos is None:
         st.info("No se encontró avance para este grupo.")
-        return
+        return None
     if datos.get("cabecera"):
         _render_avance(codigo, datos=datos)
     else:
         _render_avance_simple(datos)
+    return datos
+
+
+def _render_detalle_por_vendedor(detalle, key_prefix, etiqueta_total):
+    """Cuadro con el desglose por vendedor (o por supervisor, en el caso del Jefe de
+    Venta) de cada categoría de volumen — bloque V:AC (supervisor) / AJ:AQ (JDV) de
+    RESUMEN DE REPORTES.xlsx."""
+    if not detalle:
+        return
+    st.markdown(_CSS_AVANCE, unsafe_allow_html=True)
+    categorias = [b["categoria"] for b in detalle]
+    sel = st.selectbox("Categoría", categorias, key=f"{key_prefix}_detalle_cat")
+    bloque = next(b for b in detalle if b["categoria"] == sel)
+
+    rows = ""
+    for fila in bloque["filas"]:
+        ava = fila.get("ava_tend")
+        nombre = etiqueta_total if fila["nombre"] == "<>24" else fila["nombre"]
+        cls = "tot" if fila["nombre"] in ("<>24",) or fila is bloque["filas"][0] else ""
+        rows += (
+            f'<tr class="{cls}">'
+            f'<td>{nombre}</td>'
+            f'<td>{_hl(fila.get("obj"))}</td>'
+            f'<td><b>{_hl(fila.get("acu"))}</b></td>'
+            f'<td class="{_tend_cls(ava)}">{_pct(ava)}</td>'
+            f'<td>{_hl(fila.get("vta_prom"))}</td>'
+            f'<td>{_hl(fila.get("med_nec"))}</td>'
+            f"</tr>"
+        )
+    st.markdown(
+        '<table class="av-tabla"><thead><tr>'
+        '<th>Vendedor</th><th>Obj</th><th>Acu</th><th>%Tend</th><th>Vta Prom</th><th>Med Nec</th>'
+        '</tr></thead>'
+        f'<tbody>{rows}</tbody></table>',
+        unsafe_allow_html=True,
+    )
 
 
 def render():
@@ -95,6 +131,7 @@ def render():
     vendedores = grupo["vendedores"]
     incluir_lucky = grupo["incluir_lucky"]
     incluir_pana = grupo["incluir_pana"]
+    key_prefix = f"ger{grupo['codigo']}"
 
     _logo_path = os.path.join(os.path.dirname(__file__), "logo_palco.png")
     with open(_logo_path, "rb") as _f:
@@ -118,12 +155,17 @@ def render():
     st.divider()
 
     st.markdown("#### Avance de ventas")
-    _render_avance_grupo(grupo)
+    datos_avance = _render_avance_grupo(grupo)
+
+    detalle = (datos_avance or {}).get("detalle_por_vendedor")
+    if detalle:
+        st.markdown(f"#### Detalle por {'supervisor' if grupo['tipo'] == 'jefe' else 'vendedor'}")
+        etiqueta_total = grupo["nombre"] if grupo["tipo"] == "jefe" else "(Total)"
+        _render_detalle_por_vendedor(detalle, key_prefix, etiqueta_total)
 
     st.divider()
 
     analytics = dl.calcular_analytics_vendedor(vendedores, incluir_lucky=incluir_lucky, incluir_pana=incluir_pana)
-    key_prefix = f"ger{grupo['codigo']}"
 
     st.markdown("#### Tendencia de volumen cartera")
     render_tendencia(analytics["tendencia"], key_prefix=key_prefix)

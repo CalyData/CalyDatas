@@ -17,20 +17,35 @@ from vista_cliente import _slug, _SPLASH_CSS, _MESES_ES
 CLAVE_FICHA_GERENCIAL = "2254"
 
 
-def _render_avance_simple(datos):
+def _render_avance_simple(datos, key_prefix):
     """Para Sup 24 / Jefe de Venta / Grupo Palco: no tienen montos a cobrar, solo
-    se sigue el volumen (Obj/Acu/%Tend), sin tareas/GMV/tiempos/escalas."""
+    se sigue el volumen (Obj/Acu/%Tend), sin tareas/GMV/tiempos/escalas. Mismo toggle
+    'Ver todo' que la ficha de vendedor/supervisor — los datos ya traen mnec/mreal/m7/m14."""
     st.markdown(_CSS_AVANCE, unsafe_allow_html=True)
     lista = datos.get("metricas_hl_lista", [])
     if not lista:
         st.info("Sin datos de avance disponibles.")
         return
 
+    exp_key = f"av_expanded_{key_prefix}"
+    if exp_key not in st.session_state:
+        st.session_state[exp_key] = False
+    col_btn, _ = st.columns([1, 3])
+    with col_btn:
+        lbl_btn = "▲ Ver menos" if st.session_state[exp_key] else "▼ Ver todo"
+        if st.button(lbl_btn, key=f"btn_avexp_{key_prefix}", use_container_width=True):
+            st.session_state[exp_key] = not st.session_state[exp_key]
+            st.rerun()
+    expanded = st.session_state[exp_key]
+
+    def _td_opt(val):
+        return f"<td>{val}</td>" if expanded else ""
+
     _SEP_ANTES = {"UNG TOP", "AGUAS"}
     rows = ""
     for item in lista:
         if item["label"] in _SEP_ANTES:
-            rows += '<tr class="sep"><td colspan="4"></td></tr>'
+            rows += f'<tr class="sep"><td colspan="{8 if expanded else 4}"></td></tr>'
         ava = item.get("ava_tend")
         rows += (
             f'<tr class="{item.get("tipo","")}">'
@@ -38,11 +53,18 @@ def _render_avance_simple(datos):
             f'<td>{_hl(item.get("obj"))}</td>'
             f'<td><b>{_hl(item.get("acu"))}</b></td>'
             f'<td class="{_tend_cls(ava)}">{_pct(ava)}</td>'
-            f"</tr>"
+            + _td_opt(_hl(item.get("tend")))
+            + _td_opt(_hl(item.get("mnec")))
+            + _td_opt(_hl(item.get("mreal")))
+            + _td_opt(_hl(item.get("m7")))
+            + _td_opt(_hl(item.get("m14")))
+            + "</tr>"
         )
+    th_opt = "<th>Tend</th><th>Mnec</th><th>Mreal</th><th>-7</th><th>-14</th>" if expanded else ""
     st.markdown(
         '<table class="av-tabla"><thead><tr>'
         '<th>Volumen HL</th><th>Obj</th><th>Acu</th><th>%Tend</th>'
+        + th_opt +
         '</tr></thead>'
         f'<tbody>{rows}</tbody></table>',
         unsafe_allow_html=True,
@@ -58,7 +80,7 @@ def _render_avance_grupo(grupo):
     if datos.get("cabecera"):
         _render_avance(codigo, datos=datos)
     else:
-        _render_avance_simple(datos)
+        _render_avance_simple(datos, key_prefix=f"ger{codigo}")
     return datos
 
 

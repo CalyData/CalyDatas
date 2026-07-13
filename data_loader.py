@@ -1171,7 +1171,7 @@ def calcular_coaching_vendedor(vendedor_cod: int) -> dict | None:
     resultado = {}
     for r in encontrados:
         ts = r["timestamp"]
-        fecha = ts.strftime("%d/%m/%y") if hasattr(ts, "strftime") else str(ts)
+        fecha = ts.strftime("%d/%m/%y") if hasattr(ts, "strftime") and not pd.isna(ts) else str(ts)
         resultado[r["coaching_num"]] = {
             "pilares":      r["pilares_pct"],
             "comentario":   r.get("comentario", ""),
@@ -1206,7 +1206,7 @@ def calcular_coaching_supervisor(supervisor_cod: int) -> dict | None:
     resultado = {}
     for r in encontrados:
         ts = r["timestamp"]
-        fecha = ts.strftime("%d/%m/%y") if hasattr(ts, "strftime") else str(ts)
+        fecha = ts.strftime("%d/%m/%y") if hasattr(ts, "strftime") and not pd.isna(ts) else str(ts)
         resultado[r["coaching_num"]] = {
             "pilares":      r["pilares_pct"],
             "comentario":   r.get("comentario", ""),

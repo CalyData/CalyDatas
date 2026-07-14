@@ -176,19 +176,36 @@ def cargar_maestro_arbol():
 _HIST_COLS = ["fecha", "cliente", "articulo", "unidad_negocio", "marca", "calibre", "hl", "bultos", "importe_neto", "fuente"]
 
 
-@st.cache_data(ttl=900)  # 15 min — la tabla ventas se actualiza por sync incremental
-def cargar_historico_compras(anios=("2025", "2026")):
+@st.cache_data(ttl=14400)  # 4 h — la tabla ventas se refresca 1×/día por el sync incremental,
+                           # no hay razón para re-bajarla cada 15 min (era el gran driver de egress)
+def cargar_historico_compras(clientes=None, anios=("2025", "2026")):
     """En v2 no hace falta concatenar archivos anuales + mes actual — todo está
     unificado en la tabla 'ventas' de Supabase, ya con sync incremental diario.
     Incluye 'fuente' para poder excluir los ajustes Lucky de cálculos que dependen
     de un día real de compra (eficiencia de visita, última compra, etc.) — Lucky
-    corrige volumen, no representa una visita/venta real en una fecha específica."""
+    corrige volumen, no representa una visita/venta real en una fecha específica.
+
+    clientes: filtra en SQL (WHERE cliente = ANY(...)) para NO bajar el histórico
+    completo (~200 MB) desde Supabase en cada ficha — era la causa raíz del consumo
+    de egress. Puede ser:
+      - None  -> trae TODO (solo lo usa la vista Grupo Palco, que sí necesita todo).
+      - un int (una ficha de cliente puntual).
+      - un iterable de códigos (la cartera de un vendedor/supervisor).
+    Los callers pasan tuple(sorted(...)) para que el caché acierte de forma estable.
+    El filtro pandas posterior en cada caller se mantiene (redundante pero inofensivo)."""
     anio_min = min(int(a) for a in anios)
-    df = _query(
+    sql = (
         "SELECT fecha, cliente, articulo, unidad_negocio, marca, calibre, hl, bultos, importe_neto, fuente "
-        "FROM ventas WHERE date_part('year', fecha) >= %(anio_min)s",
-        params={"anio_min": anio_min},
+        "FROM ventas WHERE date_part('year', fecha) >= %(anio_min)s"
     )
+    params = {"anio_min": anio_min}
+    if clientes is not None:
+        lista = [int(c) for c in clientes] if hasattr(clientes, "__iter__") else [int(clientes)]
+        if not lista:
+            return pd.DataFrame(columns=_HIST_COLS)  # cartera vacía -> nada que traer
+        sql += " AND cliente = ANY(%(clientes)s)"
+        params["clientes"] = lista
+    df = _query(sql, params=params)
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     for c in ["hl", "bultos", "importe_neto"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
@@ -312,7 +329,7 @@ def datos_cliente(cliente_num):
     info = fila.iloc[0].to_dict()
 
     hoy = datetime.date.today()
-    historico = cargar_historico_compras()
+    historico = cargar_historico_compras(clientes=cliente_num)
     hist_cli = historico[historico["cliente"] == cliente_num].copy()
     hist_cli["fecha"] = pd.to_datetime(hist_cli["fecha"], errors="coerce")
     # Lucky corrige volumen, no representa una visita/venta real en una fecha específica —
@@ -436,7 +453,7 @@ def calcular_vol_cliente(cliente_num: int) -> dict:
         p_mes_ant = (hoy.year, hoy.month - 1)
     p_anio_ant = (hoy.year - 1, hoy.month)
 
-    hist = cargar_historico_compras()
+    hist = cargar_historico_compras(clientes=cliente_num)
     hist = hist[hist["cliente"] == cliente_num].copy()
     hist["fecha"] = pd.to_datetime(hist["fecha"], errors="coerce")
     hist["_anio"] = hist["fecha"].dt.year
@@ -532,7 +549,7 @@ def calcular_vol_vendedor(vendedor_cod, incluir_lucky: bool = True, incluir_pana
     cartera = cargar_cartera()
     clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int).tolist())
 
-    hist = cargar_historico_compras()
+    hist = cargar_historico_compras(clientes=tuple(sorted(clientes)))
     hist = hist[hist["cliente"].isin(clientes)].copy()
     if not incluir_lucky:
         hist = hist[hist["fuente"] != "lucky"]
@@ -627,7 +644,7 @@ _TOP_N = 6
 
 @st.cache_data(ttl=900)
 def calcular_analytics_cliente(cliente_num: int) -> dict:
-    hist_all = cargar_historico_compras()
+    hist_all = cargar_historico_compras(clientes=cliente_num)
     hist_cli = hist_all[hist_all["cliente"] == cliente_num]
 
     df, hoy = _prep_hist_ytd(hist_cli)
@@ -714,7 +731,7 @@ def calcular_analytics_vendedor(vendedor_cod, incluir_lucky: bool = True, inclui
     cartera  = cargar_cartera()
     clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int))
 
-    hist_all = cargar_historico_compras()
+    hist_all = cargar_historico_compras(clientes=tuple(sorted(clientes)))
     hist_vnd = hist_all[hist_all["cliente"].isin(clientes)]
     if not incluir_lucky:
         hist_vnd = hist_vnd[hist_vnd["fuente"] != "lucky"]
@@ -824,7 +841,7 @@ def construir_arbol_vendedor(vendedor_cod, incluir_lucky: bool = True) -> dict:
     cartera  = cargar_cartera()
     clientes = set(cartera[_filtro_vendedor(cartera["vendedor_cod"], vendedor_cod)]["cliente"].dropna().astype(int).tolist())
 
-    hist = cargar_historico_compras()
+    hist = cargar_historico_compras(clientes=tuple(sorted(clientes)))
     hist["fecha"] = pd.to_datetime(hist["fecha"], errors="coerce")
     hist_mes = hist[
         (hist["cliente"].isin(clientes)) &
@@ -943,7 +960,7 @@ def kpis_vendedor(vendedor_cod) -> dict:
         visitas_semana   = 0
         visitas_hoy_plan = 0
 
-    historico = cargar_historico_compras()
+    historico = cargar_historico_compras(clientes=tuple(sorted(clientes)))
     hist_mes = historico[
         (historico["fecha"].dt.year  == hoy.year) &
         (historico["fecha"].dt.month == hoy.month) &

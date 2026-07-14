@@ -161,8 +161,18 @@ def render():
     _splash = st.empty()
     _splash.markdown(_SPLASH_CSS.format(logo=_logo), unsafe_allow_html=True)
 
-    kpis = dl.kpis_vendedor(vendedores)
-    arbol = dl.construir_arbol_vendedor(vendedores, incluir_lucky=incluir_lucky)
+    # Jefe de Venta ('100') y Grupo Palco ('palco') abarcan casi toda la cartera:
+    # calcularlos en vivo bajaba la tabla ventas casi entera (~200MB) en cada visita.
+    # Se leen de un snapshot precalculado por el sync diario (migrar_gerencial); si
+    # todavía no existe, se cae al cálculo live. Los supervisores (cartera chica) van
+    # siempre live — ya quedaron livianos con el filtro por cliente en SQL.
+    snap = dl.cargar_gerencial_snapshot(str(grupo["codigo"])) if grupo["tipo"] in ("jefe", "palco") else None
+    if snap:
+        kpis, arbol, analytics = snap["kpis"], snap["arbol"], snap["analytics"]
+    else:
+        kpis = dl.kpis_vendedor(vendedores)
+        arbol = dl.construir_arbol_vendedor(vendedores, incluir_lucky=incluir_lucky)
+        analytics = dl.calcular_analytics_vendedor(vendedores, incluir_lucky=incluir_lucky, incluir_pana=incluir_pana)
     _splash.empty()
 
     st.markdown(f"### {grupo['nombre']}")
@@ -186,8 +196,6 @@ def render():
         _render_detalle_por_vendedor(detalle, key_prefix, etiqueta_total)
 
     st.divider()
-
-    analytics = dl.calcular_analytics_vendedor(vendedores, incluir_lucky=incluir_lucky, incluir_pana=incluir_pana)
 
     st.markdown("#### Tendencia de volumen cartera")
     render_tendencia(analytics["tendencia"], key_prefix=key_prefix)

@@ -1061,6 +1061,25 @@ def cargar_avance_grupo(codigo_grupo: str) -> dict | None:
     return datos
 
 
+@st.cache_data(ttl=1800)
+def cargar_gerencial_snapshot(codigo: str) -> dict | None:
+    """Payload precalculado de la Ficha Gerencial para los códigos PESADOS (Jefe de
+    Venta '100' y Grupo Palco 'palco') — {'kpis','arbol','analytics'}. Lo genera
+    migrar_gerencial en el sync diario para NO recalcular en vivo (que bajaba la tabla
+    ventas casi entera, ~200MB, el driver de egress que quedaba). Devuelve None si no
+    hay snapshot todavía → la vista cae al cálculo live (ver vista_gerencial)."""
+    df = _query(
+        "SELECT datos FROM gerencial_snapshot WHERE codigo = %(cod)s "
+        "ORDER BY fecha_snapshot DESC LIMIT 1",
+        params={"cod": str(codigo)},
+    )
+    if df.empty:
+        return None
+    datos = df.iloc[0]["datos"]
+    if isinstance(datos, str):
+        import json
+        datos = json.loads(datos)
+    return datos
 
 
 # ── Censo Thomas (desde Supabase) ──────────────────────────────────────────────

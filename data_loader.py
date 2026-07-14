@@ -204,6 +204,15 @@ def cargar_por_vendedor_semanas():
     return _query("SELECT * FROM por_vendedor_semanas")
 
 
+@st.cache_data(ttl=21600)
+def cargar_calendario_laboral() -> set:
+    """Fechas del mes en curso que NO son laborables (domingos/feriados) — AVANCE
+    DE VENTAS.xlsm hoja 'Planilla', fila 3. Se usa para no contar como 'visita
+    perdida' un día que en realidad nadie trabajó."""
+    df = _query("SELECT fecha FROM calendario_laboral WHERE NOT laborable")
+    return set(pd.to_datetime(df["fecha"]).dt.date)
+
+
 def semana_actual() -> int:
     """Calcula la 'ourWeek' (1-4) de hoy según la lógica del sistema Palco."""
     hoy = datetime.date.today()
@@ -254,12 +263,15 @@ def _es_semana_visita_fn(fecha, per, pasa):
 _MAP_DIAS_WD = {"lun":0,"mar":1,"mie":2,"jue":3,"vie":4,"sab":5,"dom":6}
 _DIAS_COLS   = list(_MAP_DIAS_WD.keys())
 
-def _calcular_eficiencia(pr_row, fechas_compra_set, hoy):
+def _calcular_eficiencia(pr_row, fechas_compra_set, hoy, dias_no_laborables=frozenset()):
     """Calcula eficiencia para un cliente dado su row de personalización.
     fechas_compra_set: set de datetime.date con días que tuvo compra en el mes.
+    dias_no_laborables: fechas del mes que no se trabajan de verdad (domingos/
+    feriados, ver cargar_calendario_laboral) — no cuentan como visita planificada.
     Retorna (visitas_plan, visitas_efectivas).
     Una visita es efectiva si hubo al menos una compra entre esa visita
-    y la próxima visita planificada (o fin del período)."""
+    y la próxima visita planificada (o fin del período). El día de hoy nunca
+    se cuenta como visita planificada: todavía no tuvo tiempo de derivar en venta."""
     per  = int(pr_row["periodicidad"]) if pd.notna(pr_row.get("periodicidad")) else 1
     pasa = int(pr_row["pasa_en"])      if pd.notna(pr_row.get("pasa_en"))      else 1
     dias_wd = {
@@ -272,8 +284,9 @@ def _calcular_eficiencia(pr_row, fechas_compra_set, hoy):
     primer_dia = hoy.replace(day=1)
     visitas = []
     d = primer_dia
-    while d <= hoy:
-        if d.weekday() in dias_wd and _es_semana_visita_fn(d, per, pasa):
+    while d < hoy:
+        if (d.weekday() in dias_wd and _es_semana_visita_fn(d, per, pasa)
+                and d not in dias_no_laborables):
             visitas.append(d)
         d += datetime.timedelta(days=1)
 
@@ -371,7 +384,7 @@ def datos_cliente(cliente_num):
                 (hist_cli_real["fecha"].dt.month == hoy.month)
             ]["fecha"].dt.date
         )
-        vp, ve = _calcular_eficiencia(pr, fechas_compra_mes, hoy)
+        vp, ve = _calcular_eficiencia(pr, fechas_compra_mes, hoy, cargar_calendario_laboral())
         eficiencia = f"{ve / vp * 100:.0f}%" if vp > 0 else "—"
 
         dias_marcados = {
@@ -938,6 +951,8 @@ def kpis_vendedor(vendedor_cod) -> dict:
     ].copy()
     hist_mes["fecha_d"] = hist_mes["fecha"].dt.date
 
+    dias_no_laborables = cargar_calendario_laboral()
+
     total_visitas_plan = 0
     total_efectivas    = 0
 
@@ -948,7 +963,7 @@ def kpis_vendedor(vendedor_cod) -> dict:
         if cli not in clientes: continue
 
         fechas_cli = set(hist_mes[hist_mes["cliente"] == cli]["fecha_d"])
-        vp, ve = _calcular_eficiencia(pr, fechas_cli, hoy)
+        vp, ve = _calcular_eficiencia(pr, fechas_cli, hoy, dias_no_laborables)
         total_visitas_plan += vp
         total_efectivas    += ve
 
